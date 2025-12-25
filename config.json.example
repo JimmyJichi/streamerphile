@@ -1,0 +1,15 @@
+{
+  "twitch_client_id": "",
+  "twitch_client_secret": "",
+  "discord_bot_token": "",
+  "discord_channel_id": "",
+  "max_viewers": 20,
+  "min_viewers": 0,
+  "game_ids": [],
+  "required_tags": [],
+  "exclude_tags": [],
+  "ignored_channels": [],
+  "languages": [],
+  "search_interval_minutes": 30,
+  "debug": false
+}
