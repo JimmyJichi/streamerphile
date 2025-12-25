@@ -357,7 +357,7 @@ class TwitchMonitor:
                 self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: {viewer_count} viewers > {max_viewers} max")
                 continue
             
-            stream_tags = stream.get("tag_ids", [])
+            stream_tags = stream.get("tags", [])
             
             if required_tags:
                 if not all(tag in stream_tags for tag in required_tags):
@@ -510,7 +510,7 @@ class TwitchMonitor:
             self.debug_print(f"[DEBUG]   - Game: {sample.get('game_name')}")
             self.debug_print(f"[DEBUG]   - Viewers: {sample.get('viewer_count')}")
             self.debug_print(f"[DEBUG]   - Language: {sample.get('language', 'Unknown')}")
-            self.debug_print(f"[DEBUG]   - Tags: {sample.get('tag_ids', [])}")
+            self.debug_print(f"[DEBUG]   - Tags: {sample.get('tags', [])}")
         
         filtered_streams = self.filter_streams(streams)
         self.debug_print(f"[DEBUG] Streams after filtering: {len(filtered_streams)}")
