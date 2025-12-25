@@ -217,6 +217,7 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG] Fetching streams for {len(game_ids)} game ID(s): {game_ids}")
         url = "https://api.twitch.tv/helix/streams"
         all_streams = []
+        seen_stream_ids = set()
         
         # Twitch API allows up to 100 game_ids per request
         # Pass game_ids as multiple query parameters
@@ -243,7 +244,15 @@ class TwitchMonitor:
                     data = response.json()
                     batch_streams = data.get("data", [])
                     self.debug_print(f"[DEBUG] API returned {len(batch_streams)} stream(s) for page {page_num}")
-                    all_streams.extend(batch_streams)
+                    
+                    # For some reason sometimes there are duplicates in the results. Deduplicate streams before adding
+                    for stream in batch_streams:
+                        stream_id = f"{stream.get('user_id')}_{stream.get('id')}"
+                        if stream_id not in seen_stream_ids:
+                            seen_stream_ids.add(stream_id)
+                            all_streams.append(stream)
+                        else:
+                            self.debug_print(f"[DEBUG]   Duplicate stream detected: {stream.get('user_name')} (ID: {stream_id})")
                     
                     # Check for next page
                     pagination = data.get("pagination", {})
@@ -270,7 +279,15 @@ class TwitchMonitor:
                                 data = response.json()
                                 batch_streams = data.get("data", [])
                                 self.debug_print(f"[DEBUG] Retry successful: API returned {len(batch_streams)} stream(s)")
-                                all_streams.extend(batch_streams)
+                                
+                                # Deduplicate streams before adding (same logic as above)
+                                for stream in batch_streams:
+                                    stream_id = f"{stream.get('user_id')}_{stream.get('id')}"
+                                    if stream_id not in seen_stream_ids:
+                                        seen_stream_ids.add(stream_id)
+                                        all_streams.append(stream)
+                                    else:
+                                        self.debug_print(f"[DEBUG]   Duplicate stream detected: {stream.get('user_name')} (ID: {stream_id})")
                                 
                                 # Check for next page after retry
                                 pagination = data.get("pagination", {})
