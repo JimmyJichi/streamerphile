@@ -54,6 +54,8 @@ class TwitchMonitor:
             # Set defaults if not present
             config.setdefault("max_viewers", 20)
             config.setdefault("min_viewers", 0)
+            config.setdefault("max_followers", None)
+            config.setdefault("min_followers", 0)
             config.setdefault("game_ids", [])
             config.setdefault("required_tags", [])
             config.setdefault("exclude_tags", [])
@@ -312,10 +314,12 @@ class TwitchMonitor:
         return all_streams
     
     def filter_streams(self, streams: List[Dict]) -> List[Dict]:
-        """Filter streams based on viewer count, tags, and language."""
+        """Filter streams based on viewer count, tags, language, and follower count."""
         filtered = []
         min_viewers = self.config["min_viewers"]
         max_viewers = self.config["max_viewers"]
+        min_followers = self.config.get("min_followers", 0)
+        max_followers = self.config.get("max_followers")
         required_tags = self.config.get("required_tags", [])
         exclude_tags = self.config.get("exclude_tags", [])
         ignored_channels = self.config.get("ignored_channels", [])
@@ -324,13 +328,34 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG] Filtering {len(streams)} stream(s) with criteria:")
         self.debug_print(f"[DEBUG]   - Min viewers: {min_viewers}")
         self.debug_print(f"[DEBUG]   - Max viewers: {max_viewers}")
+        self.debug_print(f"[DEBUG]   - Min followers: {min_followers}")
+        self.debug_print(f"[DEBUG]   - Max followers: {max_followers if max_followers is not None else 'No limit'}")
         self.debug_print(f"[DEBUG]   - Required tags: {required_tags}")
         self.debug_print(f"[DEBUG]   - Exclude tags: {exclude_tags}")
         self.debug_print(f"[DEBUG]   - Ignored channels: {ignored_channels}")
         self.debug_print(f"[DEBUG]   - Languages: {languages if languages else 'Any (no filter)'}")
         
+        follower_counts = {}
+        unique_user_ids = set()
+        for stream in streams:
+            user_id = stream.get("user_id", "")
+            if user_id:
+                unique_user_ids.add(user_id)
+        
+        if unique_user_ids:
+            self.debug_print(f"[DEBUG] Fetching follower counts for {len(unique_user_ids)} unique user(s)...")
+            for user_id in unique_user_ids:
+                follower_count = self.get_follower_count(user_id)
+                if follower_count is not None:
+                    follower_counts[user_id] = follower_count
+                    self.debug_print(f"[DEBUG]   User ID {user_id}: {follower_count} followers")
+                else:
+                    self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch follower count")
+        
         filtered_out_by_viewers_min = 0
         filtered_out_by_viewers_max = 0
+        filtered_out_by_followers_min = 0
+        filtered_out_by_followers_max = 0
         filtered_out_by_tags = 0
         filtered_out_by_exclude_tags = 0
         filtered_out_by_ignored_channels = 0
@@ -356,6 +381,20 @@ class TwitchMonitor:
                 filtered_out_by_viewers_max += 1
                 self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: {viewer_count} viewers > {max_viewers} max")
                 continue
+            
+            if min_followers > 0 or max_followers is not None:
+                follower_count = follower_counts.get(user_id)
+                if follower_count is None:
+                    self.debug_print(f"[DEBUG]   Stream '{user_name}': Could not determine follower count, skipping follower filter")
+                else:
+                    if follower_count < min_followers:
+                        filtered_out_by_followers_min += 1
+                        self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: {follower_count} followers < {min_followers} min")
+                        continue
+                    if max_followers is not None and follower_count > max_followers:
+                        filtered_out_by_followers_max += 1
+                        self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: {follower_count} followers > {max_followers} max")
+                        continue
             
             stream_tags = stream.get("tags", [])
             
@@ -390,13 +429,21 @@ class TwitchMonitor:
                     self.debug_print(f"[DEBUG]     Allowed languages: {languages}")
                     continue
             
-            self.debug_print(f"[DEBUG]   Stream '{user_name}' passed filters: {viewer_count} viewers")
+            # Build debug message with follower count if available
+            debug_msg = f"[DEBUG]   Stream '{user_name}' passed filters: {viewer_count} viewers"
+            follower_count = follower_counts.get(user_id)
+            if follower_count is not None:
+                debug_msg += f", {follower_count} followers"
+            self.debug_print(debug_msg)
             filtered.append(stream)
         
         self.debug_print(f"[DEBUG] Filtering results:")
         self.debug_print(f"[DEBUG]   - Total streams: {len(streams)}")
         self.debug_print(f"[DEBUG]   - Filtered out (min viewers): {filtered_out_by_viewers_min}")
         self.debug_print(f"[DEBUG]   - Filtered out (max viewers): {filtered_out_by_viewers_max}")
+        if min_followers > 0 or max_followers is not None:
+            self.debug_print(f"[DEBUG]   - Filtered out (min followers): {filtered_out_by_followers_min}")
+            self.debug_print(f"[DEBUG]   - Filtered out (max followers): {filtered_out_by_followers_max}")
         self.debug_print(f"[DEBUG]   - Filtered out (required tags): {filtered_out_by_tags}")
         self.debug_print(f"[DEBUG]   - Filtered out (excluded tags): {filtered_out_by_exclude_tags}")
         self.debug_print(f"[DEBUG]   - Filtered out (ignored channels): {filtered_out_by_ignored_channels}")
@@ -405,7 +452,35 @@ class TwitchMonitor:
         
         return filtered
     
-    def format_streams_embed(self, streams: List[Dict]) -> List[Embed]:
+    def get_follower_count(self, user_id: str) -> Optional[int]:
+        """Get follower count for a user ID."""
+        if not self.twitch_headers or not user_id:
+            return None
+        
+        url = "https://api.twitch.tv/helix/channels/followers"
+        params = {"broadcaster_id": user_id, "first": 1}  # We only need the total, so fetch 1 result
+        
+        try:
+            response = requests.get(url, headers=self.twitch_headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                total = data.get("total", 0)
+                return total
+            elif response.status_code == 401:
+                if self.validate_and_refresh_token():
+                    try:
+                        response = requests.get(url, headers=self.twitch_headers, params=params)
+                        if response.status_code == 200:
+                            data = response.json()
+                            return data.get("total", 0)
+                    except requests.exceptions.RequestException:
+                        pass
+        except requests.exceptions.RequestException:
+            pass
+        
+        return None
+    
+    async def format_streams_embed(self, streams: List[Dict]) -> List[Embed]:
         """Format streams as Discord embeds, one per game, split if >10 streams per game."""
         # Group streams by game
         streams_by_game = {}
@@ -414,6 +489,32 @@ class TwitchMonitor:
             if game_name not in streams_by_game:
                 streams_by_game[game_name] = []
             streams_by_game[game_name].append(stream)
+        
+        # Fetch follower counts for all unique users
+        user_ids = set()
+        for stream in streams:
+            user_id = stream.get("user_id")
+            if user_id:
+                user_ids.add(user_id)
+        
+        follower_counts = {}
+        # Fetch follower counts in parallel
+        if user_ids:
+            loop = asyncio.get_event_loop()
+            tasks = [
+                (user_id, loop.run_in_executor(None, self.get_follower_count, user_id))
+                for user_id in user_ids
+            ]
+            
+            # Wait for all tasks to complete
+            results = await asyncio.gather(*[task for _, task in tasks], return_exceptions=True)
+            
+            # Map results back to user IDs
+            for (user_id, _), result in zip(tasks, results):
+                if isinstance(result, Exception):
+                    continue
+                if result is not None:
+                    follower_counts[user_id] = result
         
         embeds = []
         
@@ -435,9 +536,17 @@ class TwitchMonitor:
                 # Add each streamer as a field
                 for stream in chunk_streams:
                     user_name = stream.get("user_name", "Unknown")
+                    user_id = stream.get("user_id", "")
                     title = stream.get("title", "No title")
                     viewer_count = stream.get("viewer_count", 0)
                     url = f"https://www.twitch.tv/{user_name}"
+                    
+                    # Format field name with follower count
+                    follower_count = follower_counts.get(user_id)
+                    if follower_count is not None:
+                        field_name = f"{user_name} ({follower_count} followers)"
+                    else:
+                        field_name = user_name
                     
                     field_value = f"[**{title}**]({url}) (Viewers: {viewer_count})"
                     
@@ -445,7 +554,7 @@ class TwitchMonitor:
                         field_value = field_value[:1020] + "..."
                     
                     embed.add_field(
-                        name=user_name,
+                        name=field_name,
                         value=field_value,
                         inline=False
                     )
@@ -532,7 +641,7 @@ class TwitchMonitor:
         if new_streams:
             print(f"Found {len(new_streams)} new stream(s) matching criteria!")
             
-            embeds = self.format_streams_embed(new_streams)
+            embeds = await self.format_streams_embed(new_streams)
             
             # Discord rate limit: 5 messages per 5 seconds
             # Sleep if sending more than 5 messages
@@ -724,6 +833,11 @@ class TwitchMonitor:
         print(f"\nStarting monitoring...")
         print(f"Checking every {self.config['search_interval_minutes']} minutes")
         print(f"Viewer range: {self.config['min_viewers']} - {self.config['max_viewers']}")
+        min_followers = self.config.get("min_followers", 0)
+        max_followers = self.config.get("max_followers")
+        if min_followers > 0 or max_followers is not None:
+            max_followers_str = str(max_followers) if max_followers is not None else "∞"
+            print(f"Follower range: {min_followers} - {max_followers_str}")
         print("Press Ctrl+C to stop\n")
         
         intents = discord.Intents.default()
