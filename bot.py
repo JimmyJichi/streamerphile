@@ -437,12 +437,10 @@ class TwitchMonitor:
             # Fetch broadcaster types if affiliate_or_partner_only filter is enabled
             if affiliate_or_partner_only:
                 self.debug_print(f"[DEBUG] Fetching broadcaster types for {len(unique_user_ids)} unique user(s)...")
+                broadcaster_types = self.get_broadcaster_types_batch(list(unique_user_ids))
+                # Log any user IDs that weren't found
                 for user_id in unique_user_ids:
-                    broadcaster_type = self.get_broadcaster_type(user_id)
-                    if broadcaster_type is not None:
-                        broadcaster_types[user_id] = broadcaster_type
-                        self.debug_print(f"[DEBUG]   User ID {user_id}: broadcaster_type = '{broadcaster_type}'")
-                    else:
+                    if user_id not in broadcaster_types:
                         self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch broadcaster type")
         
         # Second pass: Filter by follower count and affiliate/partner status
@@ -534,7 +532,10 @@ class TwitchMonitor:
         return None
     
     def get_broadcaster_type(self, user_id: str) -> Optional[str]:
-        """Get broadcaster type (partner, affiliate, or empty string) for a user ID."""
+        """Get broadcaster type (partner, affiliate, or empty string) for a user ID.
+        
+        Note: For multiple user IDs, use get_broadcaster_types_batch() instead.
+        """
         if not self.twitch_headers or not user_id:
             return None
         
@@ -565,6 +566,56 @@ class TwitchMonitor:
             pass
         
         return None
+    
+    def get_broadcaster_types_batch(self, user_ids: List[str]) -> Dict[str, str]:
+        """Get broadcaster types for multiple user IDs in batches (up to 100 per request).
+        
+        Args:
+            user_ids: List of user IDs to fetch broadcaster types for
+            
+        Returns:
+            Dictionary mapping user_id to broadcaster_type (empty string if not found or error)
+        """
+        if not self.twitch_headers or not user_ids:
+            return {}
+        
+        url = "https://api.twitch.tv/helix/users"
+        broadcaster_types = {}
+        
+        # Twitch API allows up to 100 user IDs per request
+        for i in range(0, len(user_ids), 100):
+            batch = user_ids[i:i+100]
+            params = [("id", uid) for uid in batch]
+            
+            try:
+                self.debug_print(f"[DEBUG] Fetching broadcaster types for batch of {len(batch)} user(s)...")
+                response = requests.get(url, headers=self.twitch_headers, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    users = data.get("data", [])
+                    for user in users:
+                        user_id = user.get("id", "")
+                        broadcaster_type = user.get("broadcaster_type", "")
+                        broadcaster_types[user_id] = broadcaster_type
+                        self.debug_print(f"[DEBUG]   User ID {user_id}: broadcaster_type = '{broadcaster_type}'")
+                elif response.status_code == 401:
+                    if self.validate_and_refresh_token():
+                        try:
+                            response = requests.get(url, headers=self.twitch_headers, params=params)
+                            if response.status_code == 200:
+                                data = response.json()
+                                users = data.get("data", [])
+                                for user in users:
+                                    user_id = user.get("id", "")
+                                    broadcaster_type = user.get("broadcaster_type", "")
+                                    broadcaster_types[user_id] = broadcaster_type
+                                    self.debug_print(f"[DEBUG]   User ID {user_id}: broadcaster_type = '{broadcaster_type}'")
+                        except requests.exceptions.RequestException as e:
+                            self.debug_print(f"[DEBUG] Error fetching broadcaster types batch: {e}")
+            except requests.exceptions.RequestException as e:
+                self.debug_print(f"[DEBUG] Error fetching broadcaster types batch: {e}")
+        
+        return broadcaster_types
     
     async def format_streams_embed(self, streams: List[Dict], follower_counts: Optional[Dict[str, int]] = None) -> List[Embed]:
         """Format streams as Discord embeds, one per game, split if >10 streams per game.
