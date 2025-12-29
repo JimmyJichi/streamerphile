@@ -207,8 +207,14 @@ class TwitchMonitor:
             print(f"Error searching games: {e}")
             return []
     
-    def get_streams(self, game_ids: List[str]) -> List[Dict]:
-        """Get active streams for given game IDs, fetching all pages."""
+    def get_streams(self, game_ids: List[str], languages: Optional[List[str]] = None) -> List[Dict]:
+        """Get active streams for given game IDs, fetching all pages.
+        
+        Args:
+            game_ids: List of game IDs to fetch streams for
+            languages: Optional list of language codes to filter by (e.g., ["en", "es"])
+                      If None or empty, no language filtering is applied
+        """
         if not game_ids:
             self.debug_print("[DEBUG] No game IDs provided to get_streams")
             return []
@@ -218,6 +224,8 @@ class TwitchMonitor:
             return []
         
         self.debug_print(f"[DEBUG] Fetching streams for {len(game_ids)} game ID(s): {game_ids}")
+        if languages:
+            self.debug_print(f"[DEBUG] Filtering by languages: {languages}")
         url = "https://api.twitch.tv/helix/streams"
         all_streams = []
         seen_stream_ids = set()
@@ -228,6 +236,9 @@ class TwitchMonitor:
             batch = game_ids[i:i+100]
             # Create list of tuples for multiple game_id parameters
             params = [("game_id", gid) for gid in batch]
+            # Add language parameters if specified
+            if languages:
+                params.extend([("language", lang) for lang in languages])
             # Add first parameter to get up to 100 results per page
             params.append(("first", "100"))
             
@@ -350,7 +361,6 @@ class TwitchMonitor:
         filtered_out_by_tags = 0
         filtered_out_by_exclude_tags = 0
         filtered_out_by_ignored_channels = 0
-        filtered_out_by_language = 0
         filtered_out_by_affiliate_partner = 0
         
         # First pass: Apply all filters EXCEPT follower count
@@ -398,15 +408,6 @@ class TwitchMonitor:
                     self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: has excluded tags")
                     self.debug_print(f"[DEBUG]     Stream tags: {stream_tags}")
                     self.debug_print(f"[DEBUG]     Excluded tags: {exclude_tags}")
-                    continue
-            
-            if languages:
-                stream_language = stream.get("language", "")
-                if stream_language not in languages:
-                    filtered_out_by_language += 1
-                    self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: language '{stream_language}' not in allowed languages")
-                    self.debug_print(f"[DEBUG]     Stream language: {stream_language}")
-                    self.debug_print(f"[DEBUG]     Allowed languages: {languages}")
                     continue
             
             # Stream passed all non-follower filters
@@ -499,7 +500,6 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG]   - Filtered out (required tags): {filtered_out_by_tags}")
         self.debug_print(f"[DEBUG]   - Filtered out (excluded tags): {filtered_out_by_exclude_tags}")
         self.debug_print(f"[DEBUG]   - Filtered out (ignored channels): {filtered_out_by_ignored_channels}")
-        self.debug_print(f"[DEBUG]   - Filtered out (language): {filtered_out_by_language}")
         if affiliate_or_partner_only:
             self.debug_print(f"[DEBUG]   - Filtered out (affiliate/partner only): {filtered_out_by_affiliate_partner}")
         self.debug_print(f"[DEBUG]   - Passed filters: {len(filtered)}")
@@ -703,7 +703,8 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG] Game IDs being monitored: {self.config['game_ids']}")
         self.debug_print(f"[DEBUG] Currently tracking {len(self.notified_streams)} already-notified stream(s)")
         
-        streams = self.get_streams(self.config["game_ids"])
+        languages = self.config.get("languages", [])
+        streams = self.get_streams(self.config["game_ids"], languages if languages else None)
         self.debug_print(f"[DEBUG] Raw streams from API: {len(streams)}")
         
         if streams:
