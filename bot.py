@@ -424,16 +424,15 @@ class TwitchMonitor:
                 unique_user_ids.add(user_id)
         
         if unique_user_ids:
-            # Fetch follower counts if needed
-            if min_followers > 0 or max_followers is not None:
-                self.debug_print(f"[DEBUG] Fetching follower counts for {len(unique_user_ids)} unique user(s)...")
-                for user_id in unique_user_ids:
-                    follower_count = self.get_follower_count(user_id)
-                    if follower_count is not None:
-                        follower_counts[user_id] = follower_count
-                        self.debug_print(f"[DEBUG]   User ID {user_id}: {follower_count} followers")
-                    else:
-                        self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch follower count")
+            # Always fetch follower counts
+            self.debug_print(f"[DEBUG] Fetching follower counts for {len(unique_user_ids)} unique user(s)...")
+            for user_id in unique_user_ids:
+                follower_count = self.get_follower_count(user_id)
+                if follower_count is not None:
+                    follower_counts[user_id] = follower_count
+                    self.debug_print(f"[DEBUG]   User ID {user_id}: {follower_count} followers")
+                else:
+                    self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch follower count")
             
             # Fetch broadcaster types if affiliate_or_partner_only filter is enabled
             if affiliate_or_partner_only:
