@@ -772,22 +772,26 @@ class TwitchMonitor:
             self.debug_print(f"[DEBUG]   - Language: {sample.get('language', 'Unknown')}")
             self.debug_print(f"[DEBUG]   - Tags: {sample.get('tags', [])}")
         
-        filtered_streams, follower_counts = self.filter_streams(streams)
-        self.debug_print(f"[DEBUG] Streams after filtering: {len(filtered_streams)}")
-        
-        new_streams = []
+        # Filter out already notified streams
+        streams_to_filter = []
         already_notified = []
-        for stream in filtered_streams:
+        for stream in streams:
             stream_id = self.get_stream_id(stream)
             if stream_id not in self.notified_streams:
-                new_streams.append(stream)
+                streams_to_filter.append(stream)
             else:
                 already_notified.append(stream.get('user_name'))
         
         if already_notified:
+            self.debug_print(f"[DEBUG] Filtered out {len(already_notified)} already notified stream(s)")
             self.debug_print(f"[DEBUG] Already notified streams: {already_notified}")
         
-        self.debug_print(f"[DEBUG] New streams (not yet notified): {len(new_streams)}")
+        self.debug_print(f"[DEBUG] Streams to filter (not yet notified): {len(streams_to_filter)}")
+        
+        filtered_streams, follower_counts = self.filter_streams(streams_to_filter)
+        self.debug_print(f"[DEBUG] Streams after filtering: {len(filtered_streams)}")
+        
+        new_streams = filtered_streams
         
         if new_streams:
             print(f"Found {len(new_streams)} new stream(s) matching criteria!")
