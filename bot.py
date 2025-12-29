@@ -711,8 +711,14 @@ class TwitchMonitor:
         
         return embeds
     
-    async def send_discord_notification(self, content=None, embed=None) -> bool:
-        """Send a notification via Discord."""
+    async def send_discord_notification(self, content=None, embed=None, silent=False) -> bool:
+        """Send a notification via Discord.
+        
+        Args:
+            content: Optional text content to send
+            embed: Optional embed to send
+            silent: If True, suppress notifications for this message
+        """
         if not self.discord_client or self.discord_client.is_closed():
             print("Error: Discord bot not initialized or closed. Check your discord_bot_token in config.json")
             return False
@@ -724,9 +730,9 @@ class TwitchMonitor:
         try:
             channel = await self.discord_client.fetch_channel(int(self.discord_channel_id))
             if embed:
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, silent=silent)
             elif content:
-                await channel.send(content=content)
+                await channel.send(content=content, silent=silent)
             return True
         except discord.errors.NotFound:
             print(f"Error: Discord channel with ID {self.discord_channel_id} not found")
@@ -799,7 +805,9 @@ class TwitchMonitor:
                     print("Rate limiting: sleeping for 5 seconds...")
                     await asyncio.sleep(5)
                 
-                if await self.send_discord_notification(embed=embed):
+                # Send first embed normally, all subsequent ones silently
+                silent = i > 0
+                if await self.send_discord_notification(embed=embed, silent=silent):
                     sent_count += 1
                 else:
                     print(f"Failed to send embed {i + 1} of {len(embeds)}")
