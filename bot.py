@@ -61,6 +61,7 @@ class TwitchMonitor:
             config.setdefault("exclude_tags", [])
             config.setdefault("ignored_channels", [])
             config.setdefault("languages", [])
+            config.setdefault("affiliate_or_partner_only", False)
             config.setdefault("search_interval_minutes", 30)
             config.setdefault("twitch_client_id", "")
             config.setdefault("twitch_client_secret", "")
@@ -329,6 +330,7 @@ class TwitchMonitor:
         exclude_tags = self.config.get("exclude_tags", [])
         ignored_channels = self.config.get("ignored_channels", [])
         languages = self.config.get("languages", [])
+        affiliate_or_partner_only = self.config.get("affiliate_or_partner_only", False)
         
         self.debug_print(f"[DEBUG] Filtering {len(streams)} stream(s) with criteria:")
         self.debug_print(f"[DEBUG]   - Min viewers: {min_viewers}")
@@ -339,6 +341,7 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG]   - Exclude tags: {exclude_tags}")
         self.debug_print(f"[DEBUG]   - Ignored channels: {ignored_channels}")
         self.debug_print(f"[DEBUG]   - Languages: {languages if languages else 'Any (no filter)'}")
+        self.debug_print(f"[DEBUG]   - Affiliate or partner only: {affiliate_or_partner_only}")
         
         filtered_out_by_viewers_min = 0
         filtered_out_by_viewers_max = 0
@@ -348,6 +351,7 @@ class TwitchMonitor:
         filtered_out_by_exclude_tags = 0
         filtered_out_by_ignored_channels = 0
         filtered_out_by_language = 0
+        filtered_out_by_affiliate_partner = 0
         
         # First pass: Apply all filters EXCEPT follower count
         # This reduces the number of API calls needed for follower counts
@@ -375,26 +379,25 @@ class TwitchMonitor:
             
             stream_tags = stream.get("tags", [])
             
-            if required_tags:
+            # I don't know why this is necessary as stream_tags should never be None, 
+            # but sometimes it is and the program hangs if it's not checked
+            if required_tags and stream_tags is None:
+                filtered_out_by_tags += 1
+                self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: no tags")
+                continue
+            if required_tags and stream_tags is not None:
                 if not all(tag in stream_tags for tag in required_tags):
                     filtered_out_by_tags += 1
                     self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: missing required tags")
                     self.debug_print(f"[DEBUG]     Stream tags: {stream_tags}")
                     self.debug_print(f"[DEBUG]     Required tags: {required_tags}")
                     continue
-            
-            if exclude_tags:
-                stream_tags_lower = [tag.lower() if isinstance(tag, str) else tag for tag in stream_tags]
-                exclude_tags_lower = [tag.lower() if isinstance(tag, str) else tag for tag in exclude_tags]
-                
-                if any(tag in stream_tags_lower for tag in exclude_tags_lower):
+            if exclude_tags and stream_tags is not None:
+                if any(tag in stream_tags for tag in exclude_tags):
                     filtered_out_by_exclude_tags += 1
-                    matching_excluded = [exclude_tag for exclude_tag in exclude_tags 
-                                       if (exclude_tag.lower() if isinstance(exclude_tag, str) else exclude_tag) in stream_tags_lower]
                     self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: has excluded tags")
                     self.debug_print(f"[DEBUG]     Stream tags: {stream_tags}")
                     self.debug_print(f"[DEBUG]     Excluded tags: {exclude_tags}")
-                    self.debug_print(f"[DEBUG]     Matching excluded tags: {matching_excluded}")
                     continue
             
             if languages:
@@ -412,6 +415,7 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG] After first pass (non-follower filters): {len(pre_filtered_streams)} stream(s) remaining")
         
         follower_counts = {}
+        broadcaster_types = {}
         unique_user_ids = set()
         for stream in pre_filtered_streams:
             user_id = stream.get("user_id", "")
@@ -419,21 +423,46 @@ class TwitchMonitor:
                 unique_user_ids.add(user_id)
         
         if unique_user_ids:
-            self.debug_print(f"[DEBUG] Fetching follower counts for {len(unique_user_ids)} unique user(s)...")
-            for user_id in unique_user_ids:
-                follower_count = self.get_follower_count(user_id)
-                if follower_count is not None:
-                    follower_counts[user_id] = follower_count
-                    self.debug_print(f"[DEBUG]   User ID {user_id}: {follower_count} followers")
-                else:
-                    self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch follower count")
+            # Fetch follower counts if needed
+            if min_followers > 0 or max_followers is not None:
+                self.debug_print(f"[DEBUG] Fetching follower counts for {len(unique_user_ids)} unique user(s)...")
+                for user_id in unique_user_ids:
+                    follower_count = self.get_follower_count(user_id)
+                    if follower_count is not None:
+                        follower_counts[user_id] = follower_count
+                        self.debug_print(f"[DEBUG]   User ID {user_id}: {follower_count} followers")
+                    else:
+                        self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch follower count")
+            
+            # Fetch broadcaster types if affiliate_or_partner_only filter is enabled
+            if affiliate_or_partner_only:
+                self.debug_print(f"[DEBUG] Fetching broadcaster types for {len(unique_user_ids)} unique user(s)...")
+                for user_id in unique_user_ids:
+                    broadcaster_type = self.get_broadcaster_type(user_id)
+                    if broadcaster_type is not None:
+                        broadcaster_types[user_id] = broadcaster_type
+                        self.debug_print(f"[DEBUG]   User ID {user_id}: broadcaster_type = '{broadcaster_type}'")
+                    else:
+                        self.debug_print(f"[DEBUG]   User ID {user_id}: Could not fetch broadcaster type")
         
-        # Second pass: Filter by follower count
+        # Second pass: Filter by follower count and affiliate/partner status
         filtered = []
         for stream in pre_filtered_streams:
             user_name = stream.get("user_name", "Unknown")
             user_id = stream.get("user_id", "")
             viewer_count = stream.get("viewer_count", 0)
+            
+            # Filter by affiliate/partner status
+            if affiliate_or_partner_only:
+                broadcaster_type = broadcaster_types.get(user_id)
+                if broadcaster_type is None:
+                    filtered_out_by_affiliate_partner += 1
+                    self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: Could not determine broadcaster type")
+                    continue
+                if broadcaster_type not in ["affiliate", "partner"]:
+                    filtered_out_by_affiliate_partner += 1
+                    self.debug_print(f"[DEBUG]   Stream '{user_name}' filtered out: broadcaster_type is '{broadcaster_type}' (not affiliate or partner)")
+                    continue
             
             if min_followers > 0 or max_followers is not None:
                 follower_count = follower_counts.get(user_id)
@@ -453,6 +482,10 @@ class TwitchMonitor:
             follower_count = follower_counts.get(user_id)
             if follower_count is not None:
                 debug_msg += f", {follower_count} followers"
+            if affiliate_or_partner_only:
+                broadcaster_type = broadcaster_types.get(user_id)
+                if broadcaster_type is not None:
+                    debug_msg += f", broadcaster_type: {broadcaster_type}"
             self.debug_print(debug_msg)
             filtered.append(stream)
         
@@ -467,6 +500,8 @@ class TwitchMonitor:
         self.debug_print(f"[DEBUG]   - Filtered out (excluded tags): {filtered_out_by_exclude_tags}")
         self.debug_print(f"[DEBUG]   - Filtered out (ignored channels): {filtered_out_by_ignored_channels}")
         self.debug_print(f"[DEBUG]   - Filtered out (language): {filtered_out_by_language}")
+        if affiliate_or_partner_only:
+            self.debug_print(f"[DEBUG]   - Filtered out (affiliate/partner only): {filtered_out_by_affiliate_partner}")
         self.debug_print(f"[DEBUG]   - Passed filters: {len(filtered)}")
         
         return filtered, follower_counts
@@ -492,6 +527,39 @@ class TwitchMonitor:
                         if response.status_code == 200:
                             data = response.json()
                             return data.get("total", 0)
+                    except requests.exceptions.RequestException:
+                        pass
+        except requests.exceptions.RequestException:
+            pass
+        
+        return None
+    
+    def get_broadcaster_type(self, user_id: str) -> Optional[str]:
+        """Get broadcaster type (partner, affiliate, or empty string) for a user ID."""
+        if not self.twitch_headers or not user_id:
+            return None
+        
+        url = "https://api.twitch.tv/helix/users"
+        params = {"id": user_id}
+        
+        try:
+            response = requests.get(url, headers=self.twitch_headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                users = data.get("data", [])
+                if users:
+                    broadcaster_type = users[0].get("broadcaster_type", "")
+                    return broadcaster_type
+            elif response.status_code == 401:
+                if self.validate_and_refresh_token():
+                    try:
+                        response = requests.get(url, headers=self.twitch_headers, params=params)
+                        if response.status_code == 200:
+                            data = response.json()
+                            users = data.get("data", [])
+                            if users:
+                                broadcaster_type = users[0].get("broadcaster_type", "")
+                                return broadcaster_type
                     except requests.exceptions.RequestException:
                         pass
         except requests.exceptions.RequestException:

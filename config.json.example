@@ -10,6 +10,7 @@
   "exclude_tags": [],
   "ignored_channels": [],
   "languages": [],
+  "affiliate_or_partner_only": false,
   "search_interval_minutes": 30,
   "debug": false
 }
