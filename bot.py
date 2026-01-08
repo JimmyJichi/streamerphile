@@ -810,7 +810,8 @@ class TwitchMonitor:
                     await asyncio.sleep(5)
                 
                 # Send first embed normally, all subsequent ones silently
-                silent = i > 0
+                # silent = i > 0
+                silent = False
                 if await self.send_discord_notification(embed=embed, silent=silent):
                     sent_count += 1
                 else:
